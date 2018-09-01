@@ -95,7 +95,9 @@ workerLoop(UA_Worker *worker) {
             continue;
         }
 
-        dc->callback(server, dc->data);
+        if(dc->callback)
+            dc->callback(server, dc->data);
+
         UA_free(dc);
     }
 
@@ -173,32 +175,25 @@ UA_Server_workerCallback(UA_Server *server, UA_ServerCallback callback,
  * 3. Check regularly if the callback is ready by adding it back to the dispatch
  *    queue. */
 
-/* Delayed callback to free the subscription memory */
-static void
-freeCallback(UA_Server *server, void *data) {
-    UA_free(data);
-}
-
-/* TODO: Delayed free should never fail. This can be achieved by adding a prefix
- * with the list pointers */
-UA_StatusCode
-UA_Server_delayedFree(UA_Server *server, void *data) {
-    return UA_Server_delayedCallback(server, freeCallback, data);
-}
-
 #ifndef UA_ENABLE_MULTITHREADING
 
-typedef struct UA_DelayedCallback {
-    SLIST_ENTRY(UA_DelayedCallback) next;
-    UA_ServerCallback callback;
-    void *data;
-} UA_DelayedCallback;
+void
+UA_Server_delayedFree(UA_Server *server, UA_ServerCallback cleanup,
+                      UA_DelayedCallback *data) {
+    data->callback = cleanup;
+    data->data = data;
+    UA_Server_delayedCallbackNoAlloc(server, data);
+}
+
+void
+UA_Server_delayedCallbackNoAlloc(UA_Server *server, UA_DelayedCallback *data) {
+    SLIST_INSERT_HEAD(&server->delayedCallbacks, data, next);
+}
 
 UA_StatusCode
 UA_Server_delayedCallback(UA_Server *server, UA_ServerCallback callback,
                           void *data) {
-    UA_DelayedCallback *dc =
-        (UA_DelayedCallback*)UA_malloc(sizeof(UA_DelayedCallback));
+    UA_DelayedCallback *dc = (UA_DelayedCallback*)UA_malloc(sizeof(UA_DelayedCallback));
     if(!dc)
         return UA_STATUSCODE_BADOUTOFMEMORY;
 
@@ -212,7 +207,8 @@ void UA_Server_cleanupDelayedCallbacks(UA_Server *server) {
     UA_DelayedCallback *dc, *dc_tmp;
     SLIST_FOREACH_SAFE(dc, &server->delayedCallbacks, next, dc_tmp) {
         SLIST_REMOVE(&server->delayedCallbacks, dc, UA_DelayedCallback, next);
-        dc->callback(server, dc->data);
+        if(dc->callback)
+            dc->callback(server, dc->data);
         UA_free(dc);
     }
 }

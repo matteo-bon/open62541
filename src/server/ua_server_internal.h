@@ -2,7 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  *
- *    Copyright 2014-2017 (c) Fraunhofer IOSB (Author: Julius Pfrommer)
+ *    Copyright 2014-2018 (c) Fraunhofer IOSB (Author: Julius Pfrommer)
  *    Copyright 2014, 2017 (c) Florian Palm
  *    Copyright 2015-2016 (c) Sten Grüner
  *    Copyright 2015 (c) Chris Iatrou
@@ -28,6 +28,17 @@ extern "C" {
 
 #ifdef UA_ENABLE_PUBSUB
 #include "ua_pubsub_manager.h"
+#endif
+
+/* Define before the inclusion of ua_subscription.h */
+#ifndef UA_ENABLE_MULTITHREADING
+typedef struct UA_DelayedCallback {
+    SLIST_ENTRY(UA_DelayedCallback) next;
+    UA_ServerCallback callback;
+    void *data;
+} UA_DelayedCallback;
+#else
+typedef WorkerCallback UA_DelayedCallback;
 #endif
 
 #ifdef UA_ENABLE_SUBSCRIPTIONS
@@ -240,8 +251,18 @@ UA_StatusCode UA_Server_editNode(UA_Server *server, UA_Session *session,
 UA_StatusCode
 UA_Server_delayedCallback(UA_Server *server, UA_ServerCallback callback, void *data);
 
-UA_StatusCode
-UA_Server_delayedFree(UA_Server *server, void *data);
+/* Enqueue a pre-filled delayed callback. This never fails as we don't have to
+ * malloc internally. */
+void
+UA_Server_delayedCallbackNoAlloc(UA_Server *server, UA_DelayedCallback *data);
+
+/* For the delayedFree, the data needs to be enqueued to a point where the
+ * server is sure it is save to delete. We want delayedFree to never fail. So
+ * the data struct needs to have UA_DelayedCallback as its first element. The
+ * data element is always freed with UA_free. An additional callback can be
+ * given to clean up the structure before freeing it. */
+void UA_Server_delayedFree(UA_Server *server, UA_ServerCallback cleanup,
+                           UA_DelayedCallback *data);
 
 #ifndef UA_ENABLE_MULTITHREADING
 /* Execute all delayed callbacks regardless of whether the worker threads have

@@ -82,7 +82,7 @@ UA_MonitoredItem_delete(UA_Server *server, UA_MonitoredItem *monitoredItem) {
     UA_ByteString_deleteMembers(&monitoredItem->lastSampledValue);
     UA_Variant_deleteMembers(&monitoredItem->lastValue);
     UA_NodeId_deleteMembers(&monitoredItem->monitoredNodeId);
-    UA_Server_delayedFree(server, monitoredItem);
+    UA_Server_delayedFree(server, NULL, &monitoredItem->delayedFreePointers);
 }
 
 UA_StatusCode

@@ -116,13 +116,6 @@ mdns_record_add_or_get(UA_Server *server, const char *record, const char *server
 }
 
 #ifdef UA_ENABLE_MULTITHREADING
-static void
-delayedFree(UA_Server *server, void *data) {
-    UA_free(data);
-}
-#endif
-
-
 
 static struct mdnsHostnameToIp_list_entry *
 mdns_hostname_add_or_get(UA_Server *server, const char *hostname, struct in_addr addr, UA_Boolean createNew) {
