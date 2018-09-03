@@ -8,6 +8,8 @@
 #ifndef UA_MDNS_INTERNAL_H
 #define UA_MDNS_INTERNAL_H
 
+#include "ua_config.h"
+
 #ifdef UA_ENABLE_DISCOVERY_MULTICAST
 
 /**

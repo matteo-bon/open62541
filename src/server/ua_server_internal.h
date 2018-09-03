@@ -57,6 +57,9 @@ typedef struct registeredServer_list_entry {
 } registeredServer_list_entry;
 
 typedef struct periodicServerRegisterCallback_entry {
+#ifdef UA_ENABLE_MULTITHREADING
+    UA_DelayedCallback delayedCleanup;
+#endif
     LIST_ENTRY(periodicServerRegisterCallback_entry) pointers;
     struct PeriodicServerRegisterCallback *callback;
 } periodicServerRegisterCallback_entry;

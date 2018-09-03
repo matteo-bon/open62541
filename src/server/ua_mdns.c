@@ -409,7 +409,8 @@ mdns_record_remove(UA_Server *server, const char *record,
     UA_free(entry);
 #else
     UA_atomic_subSize(&server->serverOnNetworkSize, 1);
-    UA_Server_delayedCallback(server, delayedFree, entry);
+    entry->delayedCleanup.callback = NULL; /* Only free the structure */
+    UA_Server_delayedCallback(server, &entry->delayedCleanup);
 #endif
 }
 
