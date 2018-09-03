@@ -17,12 +17,14 @@ extern "C" {
 
 #include "ua_util_internal.h"
 #include "ua_server.h"
+#include "ua_server_worker.h"
 #include "ua_securechannel.h"
 #include "../../deps/queue.h"
 
 typedef struct channel_entry {
-    UA_SecureChannel channel;
+    UA_DelayedCallback cleanupCallback;
     TAILQ_ENTRY(channel_entry) pointers;
+    UA_SecureChannel channel;
 } channel_entry;
 
 typedef struct {

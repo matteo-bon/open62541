@@ -25,20 +25,10 @@ extern "C" {
 #include "ua_connection_internal.h"
 #include "ua_session_manager.h"
 #include "ua_securechannel_manager.h"
+#include "ua_server_worker.h"
 
 #ifdef UA_ENABLE_PUBSUB
 #include "ua_pubsub_manager.h"
-#endif
-
-/* Define before the inclusion of ua_subscription.h */
-#ifndef UA_ENABLE_MULTITHREADING
-typedef struct UA_DelayedCallback {
-    SLIST_ENTRY(UA_DelayedCallback) next;
-    UA_ServerCallback callback;
-    void *data;
-} UA_DelayedCallback;
-#else
-typedef WorkerCallback UA_DelayedCallback;
 #endif
 
 #ifdef UA_ENABLE_SUBSCRIPTIONS
@@ -55,24 +45,12 @@ typedef struct {
 
 #endif
 
-#ifdef UA_ENABLE_MULTITHREADING
-
-#include <pthread.h>
-
-struct UA_Worker;
-typedef struct UA_Worker UA_Worker;
-
-struct UA_WorkerCallback;
-typedef struct UA_WorkerCallback UA_WorkerCallback;
-
-SIMPLEQ_HEAD(UA_DispatchQueue, UA_WorkerCallback);
-typedef struct UA_DispatchQueue UA_DispatchQueue;
-
-#endif /* UA_ENABLE_MULTITHREADING */
-
 #ifdef UA_ENABLE_DISCOVERY
 
 typedef struct registeredServer_list_entry {
+#ifdef UA_ENABLE_MULTITHREADING
+    UA_DelayedCallback delayedCleanup;
+#endif
     LIST_ENTRY(registeredServer_list_entry) pointers;
     UA_RegisteredServer registeredServer;
     UA_DateTime lastSeen;
@@ -170,16 +148,23 @@ struct UA_Server {
     /* Callbacks with a repetition interval */
     UA_Timer timer;
 
-    /* Delayed callbacks */
-    SLIST_HEAD(DelayedCallbacksList, UA_DelayedCallback) delayedCallbacks;
-
     /* Worker threads */
 #ifdef UA_ENABLE_MULTITHREADING
     UA_Worker *workers; /* there are nThread workers in a running server */
-    UA_DispatchQueue dispatchQueue; /* Dispatch queue for the worker threads */
+    SIMPLEQ_HEAD(, UA_DelayedCallback) dispatchQueue; /* Dispatch queue for the worker threads */
     pthread_mutex_t dispatchQueue_accessMutex; /* mutex for access to queue */
     pthread_cond_t dispatchQueue_condition; /* so the workers don't spin if the queue is empty */
     pthread_mutex_t dispatchQueue_conditionMutex; /* mutex for access to condition variable */
+#endif
+
+    /* Delayed callbacks; to be executed after all curretly dispatched services
+     * / callbacks have finished */
+    SIMPLEQ_HEAD(, UA_DelayedCallback) delayedCallbacks;
+#ifdef UA_ENABLE_MULTITHREADING
+    pthread_mutex_t delayedCallbacks_accessMutex;
+    UA_DelayedCallback *delayedCallbacks_checkpoint;
+    size_t delayedCallbacks_sinceDispatch; /* How many have been added since we
+                                            * tried to dispatch callbacks? */
 #endif
 
     /* For bootstrapping, omit some consistency checks, creating a reference to
@@ -241,41 +226,6 @@ UA_StatusCode UA_Server_editNode(UA_Server *server, UA_Session *session,
                                  const UA_NodeId *nodeId,
                                  UA_EditNodeCallback callback,
                                  void *data);
-
-/*************/
-/* Callbacks */
-/*************/
-
-/* Delayed callbacks are executed when all previously dispatched callbacks are
- * finished */
-UA_StatusCode
-UA_Server_delayedCallback(UA_Server *server, UA_ServerCallback callback, void *data);
-
-/* Enqueue a pre-filled delayed callback. This never fails as we don't have to
- * malloc internally. */
-void
-UA_Server_delayedCallbackNoAlloc(UA_Server *server, UA_DelayedCallback *data);
-
-/* For the delayedFree, the data needs to be enqueued to a point where the
- * server is sure it is save to delete. We want delayedFree to never fail. So
- * the data struct needs to have UA_DelayedCallback as its first element. The
- * data element is always freed with UA_free. An additional callback can be
- * given to clean up the structure before freeing it. */
-void UA_Server_delayedFree(UA_Server *server, UA_ServerCallback cleanup,
-                           UA_DelayedCallback *data);
-
-#ifndef UA_ENABLE_MULTITHREADING
-/* Execute all delayed callbacks regardless of whether the worker threads have
- * finished previous work */
-void UA_Server_cleanupDelayedCallbacks(UA_Server *server);
-#else
-void UA_Server_cleanupDispatchQueue(UA_Server *server);
-#endif
-
-/* Callback is executed in the same thread or, if possible, dispatched to one of
- * the worker threads. */
-void
-UA_Server_workerCallback(UA_Server *server, UA_ServerCallback callback, void *data);
 
 /*********************/
 /* Utility Functions */

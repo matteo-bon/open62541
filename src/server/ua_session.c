@@ -106,8 +106,10 @@ UA_Session_deleteSubscription(UA_Server *server, UA_Session *session,
     UA_Subscription_deleteMembers(server, sub);
 
     /* Add a delayed callback to remove the subscription when the currently
-     * scheduled jobs have completed */
-    UA_Server_delayedFree(server, NULL, &sub->delayedFreePointers);
+     * scheduled jobs have completed. There is no actual delayed callback. Just
+     * free the structure. */
+    sub->delayedFreePointers.callback = NULL;
+    UA_Server_delayedCallback(server, &sub->delayedFreePointers);
 
     /* Remove from the session */
     LIST_REMOVE(sub, listEntry);

@@ -216,6 +216,8 @@ void UA_Server_delete(UA_Server *server) {
     pthread_mutex_destroy(&server->dispatchQueue_accessMutex);
     pthread_cond_destroy(&server->dispatchQueue_condition);
     pthread_mutex_destroy(&server->dispatchQueue_conditionMutex);
+
+    pthread_mutex_destroy(&server->delayedCallbacks_accessMutex);
 #else
     /* Process new delayed callbacks from the cleanup */
     UA_Server_cleanupDelayedCallbacks(server);
@@ -270,9 +272,7 @@ UA_Server_new(const UA_ServerConfig *config) {
     UA_Timer_init(&server->timer);
 
     /* Initialized the linked list for delayed callbacks */
-#ifndef UA_ENABLE_MULTITHREADING
-    SLIST_INIT(&server->delayedCallbacks);
-#endif
+    SIMPLEQ_INIT(&server->delayedCallbacks);
 
     /* Initialized the dispatch queue for worker threads */
 #ifdef UA_ENABLE_MULTITHREADING

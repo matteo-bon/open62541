@@ -14,7 +14,7 @@
 #ifndef UA_SUBSCRIPTION_H_
 #define UA_SUBSCRIPTION_H_
 
-#include "ua_server_internal.h"
+#include "ua_server_worker.h"
 #include "ua_util_internal.h"
 #include "ua_types.h"
 #include "ua_types_generated.h"

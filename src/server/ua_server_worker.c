@@ -37,32 +37,6 @@
 
 #ifdef UA_ENABLE_MULTITHREADING
 
-struct UA_Worker {
-    UA_Server *server;
-    pthread_t thr;
-    UA_UInt32 counter;
-    volatile UA_Boolean running;
-
-    /* separate cache lines */
-    char padding[64 - sizeof(void*) - sizeof(pthread_t) -
-                 sizeof(UA_UInt32) - sizeof(UA_Boolean)];
-};
-
-struct UA_WorkerCallback {
-    SIMPLEQ_ENTRY(UA_WorkerCallback) next;
-    UA_ServerCallback callback;
-    void *data;
-
-    UA_Boolean delayed;         /* Is it a delayed callback? */
-    UA_Boolean countersSampled; /* Have the worker counters been sampled? */
-    UA_UInt32 workerCounters[]; /* Counter value for each worker */
-};
-typedef struct UA_WorkerCallback WorkerCallback;
-
-/* Forward Declaration */
-static void
-processDelayedCallback(UA_Server *server, WorkerCallback *dc);
-
 static void *
 workerLoop(UA_Worker *worker) {
     UA_Server *server = worker->server;
@@ -75,14 +49,16 @@ workerLoop(UA_Worker *worker) {
 
     while(*running) {
         UA_atomic_addUInt32(counter, 1);
+
+        /* Remove a callback from the queue */
         pthread_mutex_lock(&server->dispatchQueue_accessMutex);
-        WorkerCallback *dc = SIMPLEQ_FIRST(&server->dispatchQueue);
-        if(dc) {
+        UA_DelayedCallback *dc = SIMPLEQ_FIRST(&server->dispatchQueue);
+        if(dc)
             SIMPLEQ_REMOVE_HEAD(&server->dispatchQueue, next);
-        }
         pthread_mutex_unlock(&server->dispatchQueue_accessMutex);
+
+        /* Nothing to do. Sleep until a callback is dispatched */
         if(!dc) {
-            /* Nothing to do. Sleep until a callback is dispatched */
             pthread_mutex_lock(&server->dispatchQueue_conditionMutex);
             pthread_cond_wait(&server->dispatchQueue_condition,
                               &server->dispatchQueue_conditionMutex);
@@ -90,14 +66,9 @@ workerLoop(UA_Worker *worker) {
             continue;
         }
 
-        if(dc->delayed) {
-            processDelayedCallback(server, dc);
-            continue;
-        }
-
+        /* Execute */
         if(dc->callback)
             dc->callback(server, dc->data);
-
         UA_free(dc);
     }
 
@@ -109,7 +80,7 @@ workerLoop(UA_Worker *worker) {
 void UA_Server_cleanupDispatchQueue(UA_Server *server) {
     while(true) {
         pthread_mutex_lock(&server->dispatchQueue_accessMutex);
-        WorkerCallback *dc = SIMPLEQ_FIRST(&server->dispatchQueue);
+        UA_DelayedCallback *dc = SIMPLEQ_FIRST(&server->dispatchQueue);
         if(!dc) {
             pthread_mutex_unlock(&server->dispatchQueue_accessMutex);
             break;
@@ -123,31 +94,26 @@ void UA_Server_cleanupDispatchQueue(UA_Server *server) {
 
 #endif
 
-/**
- * Repeated Callbacks
- * ------------------
- * Repeated Callbacks are handled by UA_Timer (used in both client and server).
- * In the multi-threaded case, callbacks are dispatched to workers. Otherwise,
- * they are executed immediately. */
+/* For multithreading, callbacks are not directly executed but enqueued for the
+ * worker threads */
 
-void
-UA_Server_workerCallback(UA_Server *server, UA_ServerCallback callback,
-                         void *data) {
+static void
+executeCallback(UA_Server *server, UA_ServerCallback callback, void *data) {
 #ifndef UA_ENABLE_MULTITHREADING
     /* Execute immediately */
     callback(server, data);
 #else
     /* Execute immediately if memory could not be allocated */
-    WorkerCallback *dc = (WorkerCallback*)UA_malloc(sizeof(WorkerCallback));
+    UA_DelayedCallback *dc = (UA_DelayedCallback*)UA_malloc(sizeof(UA_DelayedCallback));
     if(!dc) {
         callback(server, data);
         return;
     }
 
-    /* Enqueue for the worker threads */
     dc->callback = callback;
     dc->data = data;
-    dc->delayed = false;
+
+    /* Enqueue for the worker threads */
     pthread_mutex_lock(&server->dispatchQueue_accessMutex);
     SIMPLEQ_INSERT_TAIL(&server->dispatchQueue, dc, next);
     pthread_mutex_unlock(&server->dispatchQueue_accessMutex);
@@ -157,134 +123,83 @@ UA_Server_workerCallback(UA_Server *server, UA_ServerCallback callback,
 #endif
 }
 
-/**
- * Delayed Callbacks
- * -----------------
- *
- * Delayed Callbacks are called only when all callbacks that were dispatched
- * prior are finished. In the single-threaded case, the callback is added to a
- * singly-linked list that is processed at the end of the server's main-loop. In
- * the multi-threaded case, the delay is ensure by a three-step procedure:
- *
- * 1. The delayed callback is dispatched to the worker queue. So it is only
- *    dequeued when all prior callbacks have been dequeued.
- *
- * 2. When the callback is first dequeued by a worker, sample the counter of all
- *    workers. Once all counters have advanced, the callback is ready.
- *
- * 3. Check regularly if the callback is ready by adding it back to the dispatch
- *    queue. */
+/*********************/
+/* Delayed Callbacks */
+/*********************/
 
-#ifndef UA_ENABLE_MULTITHREADING
+#ifdef UA_ENABLE_MULTITHREADING
+
+/* Delayed Callbacks are called only when all callbacks that were dispatched
+ * prior are finished. After every UA_MAX_DELAYED_SAMPLE delayed Callbacks that
+ * were added to the queue, we sample the counters from the workers. The
+ * counters are compared to the last counters that were sampled. If every worker
+ * has proceeded the counter, then we know that all delayed callbacks prior to
+ * the last sample-point are safe to execute. */
+
+/* Sample the worker counter for every nth delayed callback. This is used to
+ * test that all workers have **finished** their current job before the delayed
+ * callback is processed. */
+#define UA_MAX_DELAYED_SAMPLE 100
+
+/* Call only with a held mutex for the delayed callbacks */
+static void
+dispatchDelayedCallbacks(UA_Server *server, UA_DelayedCallback *cb) {
+    /* Are callbacks before the last checkpoint ready? */
+    for(size_t i = 0; i < server->config.nThreads; ++i) {
+        if(server->workers[i].counter == server->workers[i].checkpointCounter)
+            return;
+    }
+
+    /* Dispatch all delayed callbacks up to the checkpoint.
+     * TODO: Move over the entire queue up to the checkpoint in one step. */
+    if(server->delayedCallbacks_checkpoint != NULL) {
+        UA_DelayedCallback *iter, *tmp_iter;
+        SIMPLEQ_FOREACH_SAFE(iter, &server->delayedCallbacks, next, tmp_iter) {
+            pthread_mutex_lock(&server->dispatchQueue_accessMutex);
+            SIMPLEQ_INSERT_TAIL(&server->dispatchQueue, iter, next);
+            pthread_mutex_unlock(&server->dispatchQueue_accessMutex);
+            if(iter == server->delayedCallbacks_checkpoint)
+                break;
+        }
+    }
+
+    /* Create the new sample point */
+    for(size_t i = 0; i < server->config.nThreads; ++i)
+        server->workers[i].checkpointCounter = server->workers[i].counter;
+    server->delayedCallbacks_checkpoint = cb;
+}
+
+#endif
 
 void
-UA_Server_delayedFree(UA_Server *server, UA_ServerCallback cleanup,
-                      UA_DelayedCallback *data) {
-    data->callback = cleanup;
-    data->data = data;
-    UA_Server_delayedCallbackNoAlloc(server, data);
+UA_Server_delayedCallback(UA_Server *server, UA_DelayedCallback *cb) {
+#ifdef UA_ENABLE_MULTITHREADING
+    pthread_mutex_lock(&server->dispatchQueue_accessMutex);
+#endif
+    SIMPLEQ_INSERT_HEAD(&server->delayedCallbacks, cb, next);
+#ifdef UA_ENABLE_MULTITHREADING
+    server->delayedCallbacks_sinceDispatch++;
+    if(server->delayedCallbacks_sinceDispatch > UA_MAX_DELAYED_SAMPLE) {
+        dispatchDelayedCallbacks(server, cb);
+        server->delayedCallbacks_sinceDispatch = 0;
+    }
+    pthread_mutex_unlock(&server->dispatchQueue_accessMutex);
+#endif
 }
 
-void
-UA_Server_delayedCallbackNoAlloc(UA_Server *server, UA_DelayedCallback *data) {
-    SLIST_INSERT_HEAD(&server->delayedCallbacks, data, next);
-}
-
-UA_StatusCode
-UA_Server_delayedCallback(UA_Server *server, UA_ServerCallback callback,
-                          void *data) {
-    UA_DelayedCallback *dc = (UA_DelayedCallback*)UA_malloc(sizeof(UA_DelayedCallback));
-    if(!dc)
-        return UA_STATUSCODE_BADOUTOFMEMORY;
-
-    dc->callback = callback;
-    dc->data = data;
-    SLIST_INSERT_HEAD(&server->delayedCallbacks, dc, next);
-    return UA_STATUSCODE_GOOD;
-}
-
+/* All workers are shut down at this point */
 void UA_Server_cleanupDelayedCallbacks(UA_Server *server) {
     UA_DelayedCallback *dc, *dc_tmp;
-    SLIST_FOREACH_SAFE(dc, &server->delayedCallbacks, next, dc_tmp) {
-        SLIST_REMOVE(&server->delayedCallbacks, dc, UA_DelayedCallback, next);
+    SIMPLEQ_FOREACH_SAFE(dc, &server->delayedCallbacks, next, dc_tmp) {
+        SIMPLEQ_REMOVE_HEAD(&server->delayedCallbacks, next);
         if(dc->callback)
             dc->callback(server, dc->data);
         UA_free(dc);
     }
-}
-
-#else /* UA_ENABLE_MULTITHREADING */
-
-UA_StatusCode
-UA_Server_delayedCallback(UA_Server *server, UA_ServerCallback callback,
-                          void *data) {
-    size_t dcsize = sizeof(WorkerCallback) +
-        (sizeof(UA_UInt32) * server->config.nThreads);
-    WorkerCallback *dc = (WorkerCallback*)UA_malloc(dcsize);
-    if(!dc)
-        return UA_STATUSCODE_BADOUTOFMEMORY;
-
-    /* Enqueue for the worker threads */
-    dc->callback = callback;
-    dc->data = data;
-    dc->delayed = true;
-    dc->countersSampled = false;
-    pthread_mutex_lock(&server->dispatchQueue_accessMutex);
-    SIMPLEQ_INSERT_TAIL(&server->dispatchQueue, dc, next);
-    pthread_mutex_unlock(&server->dispatchQueue_accessMutex);
-
-    /* Wake up sleeping workers */
-    pthread_cond_broadcast(&server->dispatchQueue_condition);
-    return UA_STATUSCODE_GOOD;
-}
-
-/* Called from the worker loop */
-static void
-processDelayedCallback(UA_Server *server, WorkerCallback *dc) {
-    /* Set the worker counters */
-    if(!dc->countersSampled) {
-        for(size_t i = 0; i < server->config.nThreads; ++i)
-            dc->workerCounters[i] = server->workers[i].counter;
-        dc->countersSampled = true;
-
-        /* Re-add to the dispatch queue */
-        pthread_mutex_lock(&server->dispatchQueue_accessMutex);
-        SIMPLEQ_INSERT_TAIL(&server->dispatchQueue, dc, next);
-        pthread_mutex_unlock(&server->dispatchQueue_accessMutex);
-
-        /* Wake up sleeping workers */
-        pthread_cond_broadcast(&server->dispatchQueue_condition);
-        return;
-    }
-
-    /* Have all other jobs finished? */
-    UA_Boolean ready = true;
-    for(size_t i = 0; i < server->config.nThreads; ++i) {
-        if(dc->workerCounters[i] == server->workers[i].counter) {
-            ready = false;
-            break;
-        }
-    }
-
-    /* Re-add to the dispatch queue.
-     * TODO: What is the impact of this loop?
-     * Can we add a small delay here? */
-    if(!ready) {
-        pthread_mutex_lock(&server->dispatchQueue_accessMutex);
-        SIMPLEQ_INSERT_TAIL(&server->dispatchQueue, dc, next);
-        pthread_mutex_unlock(&server->dispatchQueue_accessMutex);
-
-        /* Wake up sleeping workers */
-        pthread_cond_broadcast(&server->dispatchQueue_condition);
-        return;
-    }
-
-    /* Execute the callback */
-    dc->callback(server, dc->data);
-    UA_free(dc);
-}
-
+#ifdef UA_ENABLE_MULTITHREADING
+    server->delayedCallbacks_checkpoint = NULL;
 #endif
+}
 
 /**
  * Main Server Loop
@@ -355,10 +270,7 @@ UA_UInt16
 UA_Server_run_iterate(UA_Server *server, UA_Boolean waitInternal) {
     /* Process repeated work */
     UA_DateTime now = UA_DateTime_nowMonotonic();
-    UA_DateTime nextRepeated =
-        UA_Timer_process(&server->timer, now,
-                         (UA_TimerDispatchCallback)UA_Server_workerCallback,
-                         server);
+    UA_DateTime nextRepeated = UA_Timer_process(&server->timer, now, (UA_TimerDispatchCallback)executeCallback, server);
     UA_DateTime latest = now + (UA_MAXTIMEOUT * UA_DATETIME_MSEC);
     if(nextRepeated > latest)
         nextRepeated = latest;
@@ -376,13 +288,6 @@ UA_Server_run_iterate(UA_Server *server, UA_Boolean waitInternal) {
         nl->listen(nl, server, timeout);
     }
 
-#ifndef UA_ENABLE_MULTITHREADING
-    /* Process delayed callbacks when all callbacks and network events are done.
-     * If multithreading is enabled, the cleanup of delayed values is attempted
-     * by a callback in the job queue. */
-    UA_Server_cleanupDelayedCallbacks(server);
-#endif
-
 #if defined(UA_ENABLE_DISCOVERY_MULTICAST) && !defined(UA_ENABLE_MULTITHREADING)
     if(server->config.applicationDescription.applicationType ==
        UA_APPLICATIONTYPE_DISCOVERYSERVER) {
@@ -396,6 +301,10 @@ UA_Server_run_iterate(UA_Server *server, UA_Boolean waitInternal) {
         if(hasNext == UA_STATUSCODE_GOOD && multicastNextRepeat < nextRepeated)
             nextRepeated = multicastNextRepeat;
     }
+#endif
+
+#ifndef UA_ENABLE_MULTITHREADING
+    UA_Server_cleanupDelayedCallbacks(server);
 #endif
 
     now = UA_DateTime_nowMonotonic();
@@ -427,13 +336,15 @@ UA_Server_run_shutdown(UA_Server *server) {
         UA_free(server->workers);
         server->workers = NULL;
     }
+#endif
 
+    /* Dispatch all delayed callbacks */
+    UA_Server_cleanupDelayedCallbacks(server);
+
+#ifdef UA_ENABLE_MULTITHREADING
     /* Execute the remaining callbacks in the dispatch queue. Also executes
      * delayed callbacks. */
     UA_Server_cleanupDispatchQueue(server);
-#else
-    /* Process remaining delayed callbacks */
-    UA_Server_cleanupDelayedCallbacks(server);
 #endif
 
 #ifdef UA_ENABLE_DISCOVERY_MULTICAST
