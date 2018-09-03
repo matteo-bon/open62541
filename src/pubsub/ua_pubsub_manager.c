@@ -299,7 +299,7 @@ UA_PubSubManager_delete(UA_Server *server, UA_PubSubManager *pubSubManager) {
 UA_StatusCode
 UA_PubSubManager_addRepeatedCallback(UA_Server *server, UA_ServerCallback callback,
                                      void *data, UA_UInt32 interval, UA_UInt64 *callbackId) {
-    return UA_Timer_addRepeatedCallback(&server->timer, (UA_TimerCallback)callback,
+    return UA_Timer_addRepeatedCallback(&server->timer, (UA_ApplicationCallback)callback,
                                         data, interval, callbackId);
 }
 

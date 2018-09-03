@@ -640,7 +640,7 @@ UA_Client_addRepeatedCallback(UA_Client *Client, UA_ClientCallback callback,
                               void *data, UA_UInt32 interval,
                               UA_UInt64 *callbackId) {
     return UA_Timer_addRepeatedCallback(&Client->timer,
-                                        (UA_TimerCallback) callback, data,
+                                        (UA_ApplicationCallback) callback, data,
                                         interval, callbackId);
 }
 

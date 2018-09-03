@@ -33,7 +33,7 @@ struct UA_TimerCallbackEntry {
     UA_UInt64 interval;                      /* Interval in 100ns resolution */
     UA_UInt64 id;                            /* Id of the repeated callback */
 
-    UA_TimerCallback callback;
+    UA_ApplicationCallback callback;
     void *data;
 };
 
@@ -88,7 +88,7 @@ dequeueChange(UA_Timer *t) {
  * future. This will be picked up in the next iteration and inserted at the
  * correct place. So that the next execution takes place ät "nextTime". */
 UA_StatusCode
-UA_Timer_addRepeatedCallback(UA_Timer *t, UA_TimerCallback callback,
+UA_Timer_addRepeatedCallback(UA_Timer *t, UA_ApplicationCallback callback,
                              void *data, UA_UInt32 interval,
                              UA_UInt64 *callbackId) {
     /* A callback method needs to be present */
@@ -173,7 +173,7 @@ UA_Timer_changeRepeatedCallbackInterval(UA_Timer *t, UA_UInt64 callbackId,
     tc->interval = (UA_UInt64)interval * UA_DATETIME_MSEC;
     tc->id = callbackId;
     tc->nextTime = UA_DateTime_nowMonotonic() + (UA_DateTime)tc->interval;
-    tc->callback = (UA_TimerCallback)CHANGE_SENTINEL;
+    tc->callback = (UA_ApplicationCallback)CHANGE_SENTINEL;
 
     /* Enqueue the changes in the MPSC queue */
     enqueueChange(t, tc);
@@ -219,7 +219,7 @@ UA_Timer_removeRepeatedCallback(UA_Timer *t, UA_UInt64 callbackId) {
 
     /* Set the repeated callback with the sentinel nextTime */
     tc->id = callbackId;
-    tc->callback = (UA_TimerCallback)REMOVE_SENTINEL;
+    tc->callback = (UA_ApplicationCallback)REMOVE_SENTINEL;
 
     /* Enqueue the changes in the MPSC queue */
     enqueueChange(t, tc);
