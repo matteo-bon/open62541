@@ -49,38 +49,18 @@ void UA_Client_workerCallback(UA_Client *client, UA_ClientCallback callback,
  * 3. Check regularly if the callback is ready by adding it back to the dispatch
  *    queue. */
 
-typedef struct UA_DelayedClientCallback {
-    SLIST_ENTRY(UA_DelayedClientCallback)
-    next;
-    UA_ClientCallback callback;
-    void *data;
-} UA_DelayedClientCallback;
-
-UA_StatusCode UA_Client_delayedCallback(UA_Client *client,
-        UA_ClientCallback callback, void *data) {
-    UA_DelayedClientCallback *dc = (UA_DelayedClientCallback*) UA_malloc(
-            sizeof(UA_DelayedClientCallback));
+UA_StatusCode
+UA_Client_delayedCallback(UA_Client *client, UA_ClientCallback callback, void *data) {
+    UA_DelayedCallback *dc = (UA_DelayedCallback*)
+        UA_malloc(sizeof(UA_DelayedCallback));
     if (!dc)
         return UA_STATUSCODE_BADOUTOFMEMORY;
 
-    dc->callback = callback;
+    dc->callback = (UA_ApplicationCallback)callback;
+    dc->application = client;
     dc->data = data;
-    SLIST_INSERT_HEAD(&client->delayedClientCallbacks, dc, next);
+    UA_WorkQueue_enqueueDelayed(&client->workQueue, dc);
     return UA_STATUSCODE_GOOD;
-}
-
-void
-processDelayedClientCallbacks(UA_Client *client);
-
-void processDelayedClientCallbacks(UA_Client *client) {
-    UA_DelayedClientCallback *dc, *dc_tmp;
-    SLIST_FOREACH_SAFE(dc, &client->delayedClientCallbacks, next, dc_tmp)
-    {
-        SLIST_REMOVE(&client->delayedClientCallbacks, dc,
-                UA_DelayedClientCallback, next);
-        dc->callback(client, dc->data);
-        UA_free(dc);
-    }
 }
 
 static void
@@ -181,8 +161,7 @@ UA_StatusCode UA_Client_run_iterate(UA_Client *client, UA_UInt16 timeout) {
 
     else{
         UA_DateTime now = UA_DateTime_nowMonotonic();
-        UA_Timer_process(&client->timer, now,
-                         (UA_TimerDispatchCallback) UA_Client_workerCallback, client);
+        UA_Timer_process(&client->timer, now, &client->workQueue, client);
 
         UA_ClientState cs = UA_Client_getState(client);
         retval = UA_Client_connect_iterate(client);
@@ -205,9 +184,9 @@ UA_StatusCode UA_Client_run_iterate(UA_Client *client, UA_UInt16 timeout) {
         asyncServiceTimeoutCheck(client);
 
 #ifndef UA_ENABLE_MULTITHREADING
-/* Process delayed callbacks when all callbacks and
- * network events are done */
-    processDelayedClientCallbacks(client);
+        /* Process delayed callbacks when all callbacks and network events are
+         * done */
+        UA_WorkQueue_manuallyProcessDelayed(&client->workQueue);
 #endif
     return retval;
 }

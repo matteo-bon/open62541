@@ -13,7 +13,7 @@
 extern "C" {
 #endif
 
-#include "ua_util_internal.h"
+#include "ua_workqueue.h"
 
 /* An (event) timer triggers callbacks with a recurring interval. Adding,
  * removing and changing repeated callbacks can be done from independent
@@ -51,8 +51,6 @@ void UA_Timer_init(UA_Timer *t);
 
 /* Add a repated callback. Thread-safe, can be used in parallel and in parallel
  * with UA_Timer_process. */
-typedef void (*UA_ApplicationCallback)(void *application, void *data);
-
 UA_StatusCode
 UA_Timer_addRepeatedCallback(UA_Timer *t, UA_ApplicationCallback callback, void *data,
                              UA_UInt32 interval, UA_UInt64 *callbackId);
@@ -72,14 +70,9 @@ UA_Timer_removeRepeatedCallback(UA_Timer *t, UA_UInt64 callbackId);
  * timestamp of the next scheduled repeated callback. Not thread-safe.
  * Application is a pointer to the client / server environment for the callback.
  * Dispatched is set to true when at least one callback was run / dispatched. */
-typedef void (*UA_TimerDispatchCallback)(void *application,
-                                         UA_ApplicationCallback callback,
-                                         void *data);
-
 UA_DateTime
 UA_Timer_process(UA_Timer *t, UA_DateTime nowMonotonic,
-                 UA_TimerDispatchCallback dispatchCallback,
-                 void *application);
+                 UA_WorkQueue *wq, void *application);
 
 /* Remove all repeated callbacks. Not thread-safe. */
 void UA_Timer_deleteMembers(UA_Timer *t);

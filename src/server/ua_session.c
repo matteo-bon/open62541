@@ -109,7 +109,7 @@ UA_Session_deleteSubscription(UA_Server *server, UA_Session *session,
      * scheduled jobs have completed. There is no actual delayed callback. Just
      * free the structure. */
     sub->delayedFreePointers.callback = NULL;
-    UA_Server_delayedCallback(server, &sub->delayedFreePointers);
+    UA_WorkQueue_enqueueDelayed(&server->workQueue, &sub->delayedFreePointers);
 
     /* Remove from the session */
     LIST_REMOVE(sub, listEntry);

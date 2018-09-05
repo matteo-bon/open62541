@@ -25,7 +25,7 @@ extern "C" {
 #include "ua_connection_internal.h"
 #include "ua_session_manager.h"
 #include "ua_securechannel_manager.h"
-#include "ua_server_worker.h"
+#include "ua_workqueue.h"
 
 #ifdef UA_ENABLE_PUBSUB
 #include "ua_pubsub_manager.h"
@@ -151,24 +151,7 @@ struct UA_Server {
     /* Callbacks with a repetition interval */
     UA_Timer timer;
 
-    /* Worker threads */
-#ifdef UA_ENABLE_MULTITHREADING
-    UA_Worker *workers; /* there are nThread workers in a running server */
-    SIMPLEQ_HEAD(, UA_DelayedCallback) dispatchQueue; /* Dispatch queue for the worker threads */
-    pthread_mutex_t dispatchQueue_accessMutex; /* mutex for access to queue */
-    pthread_cond_t dispatchQueue_condition; /* so the workers don't spin if the queue is empty */
-    pthread_mutex_t dispatchQueue_conditionMutex; /* mutex for access to condition variable */
-#endif
-
-    /* Delayed callbacks; to be executed after all curretly dispatched services
-     * / callbacks have finished */
-    SIMPLEQ_HEAD(, UA_DelayedCallback) delayedCallbacks;
-#ifdef UA_ENABLE_MULTITHREADING
-    pthread_mutex_t delayedCallbacks_accessMutex;
-    UA_DelayedCallback *delayedCallbacks_checkpoint;
-    size_t delayedCallbacks_sinceDispatch; /* How many have been added since we
-                                            * tried to dispatch callbacks? */
-#endif
+    UA_WorkQueue workQueue;
 
     /* For bootstrapping, omit some consistency checks, creating a reference to
      * the parent and member instantiation */

@@ -85,7 +85,7 @@ UA_MonitoredItem_delete(UA_Server *server, UA_MonitoredItem *monitoredItem) {
 
     /* No actual callback, just remove the structure */
     monitoredItem->delayedFreePointers.callback = NULL;
-    UA_Server_delayedCallback(server, &monitoredItem->delayedFreePointers);
+    UA_WorkQueue_enqueueDelayed(&server->workQueue, &monitoredItem->delayedFreePointers);
 }
 
 UA_StatusCode

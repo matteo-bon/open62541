@@ -422,7 +422,7 @@ process_RegisterServer(UA_Server *server, UA_Session *session,
 #else
         UA_atomic_subSize(&server->registeredServersSize, 1);
         registeredServer_entry->delayedCleanup.callback = NULL; /* only free the structure */
-        UA_Server_delayedCallback(server, &registeredServer_entry->delayedCleanup);
+        UA_WorkQueue_enqueueDelayed(&server->workQueue, &registeredServer_entry->delayedCleanup);
 #endif
         responseHeader->serviceResult = UA_STATUSCODE_GOOD;
         return;
@@ -545,7 +545,7 @@ void UA_Discovery_cleanupTimedOut(UA_Server *server, UA_DateTime nowMonotonic) {
 #else
             UA_atomic_subSize(&server->registeredServersSize, 1);
             current->delayedCleanup.callback = NULL; /* Only free the structure */
-            UA_Server_delayedCallback(server, &current->delayedCleanup);
+            UA_WorkQueue_enqueueDelayed(&server->workQueue, &current->delayedCleanup);
 #endif
         }
     }

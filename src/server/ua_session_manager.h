@@ -17,7 +17,7 @@ extern "C" {
 #endif
 
 #include "ua_server.h"
-#include "ua_server_worker.h"
+#include "ua_workqueue.h"
 #include "ua_util_internal.h"
 #include "ua_session.h"
 #include "../../deps/queue.h"

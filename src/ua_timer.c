@@ -265,8 +265,7 @@ processChanges(UA_Timer *t) {
 
 UA_DateTime
 UA_Timer_process(UA_Timer *t, UA_DateTime nowMonotonic,
-                 UA_TimerDispatchCallback dispatchCallback,
-                 void *application) {
+                 UA_WorkQueue *wq, void *application) {
     /* Insert and remove callbacks */
     processChanges(t);
 
@@ -303,7 +302,11 @@ UA_Timer_process(UA_Timer *t, UA_DateTime nowMonotonic,
         SLIST_REMOVE_HEAD(&executedNowList, next);
 
         /* Dispatch/process callback */
-        dispatchCallback(application, tc->callback, tc->data);
+#ifdef UA_ENABLE_MULTITHREADING
+        UA_WorkQueue_enqueue(wq, tc->callback, application, tc->data);
+#else
+        tc->callback(application, tc->data);
+#endif
 
         /* Set the time for the next execution. Prevent an infinite loop by
          * forcing the next processing into the next iteration. */

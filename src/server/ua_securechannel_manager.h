@@ -17,7 +17,7 @@ extern "C" {
 
 #include "ua_util_internal.h"
 #include "ua_server.h"
-#include "ua_server_worker.h"
+#include "ua_workqueue.h"
 #include "ua_securechannel.h"
 #include "../../deps/queue.h"
 

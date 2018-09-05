@@ -47,9 +47,7 @@ UA_Client_init(UA_Client* client, UA_ClientConfig config) {
     /* Needed by async client */
     UA_Timer_init(&client->timer);
 
-#ifndef UA_ENABLE_MULTITHREADING
-    SLIST_INIT(&client->delayedClientCallbacks);
-#endif
+    UA_WorkQueue_init(&client->workQueue);
 }
 
 UA_Client *
@@ -205,6 +203,9 @@ UA_Client_deleteMembers(UA_Client* client) {
 
     /* Delete the timed work */
     UA_Timer_deleteMembers(&client->timer);
+
+    /* Clean up the work queue */
+    UA_WorkQueue_cleanup(&client->workQueue);
 }
 
 void

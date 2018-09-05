@@ -40,9 +40,8 @@ UA_SecureChannelManager_deleteMembers(UA_SecureChannelManager *cm) {
 }
 
 static void
-removeSecureChannelCallback(UA_Server *server, void *entry) {
-    channel_entry *centry = (channel_entry *)entry;
-    UA_SecureChannel_deleteMembersCleanup(&centry->channel);
+removeSecureChannelCallback(UA_Server *server, channel_entry *entry) {
+    UA_SecureChannel_deleteMembersCleanup(&entry->channel);
 }
 
 static void
@@ -53,9 +52,9 @@ removeSecureChannel(UA_SecureChannelManager *cm, channel_entry *entry) {
 
     /* Add a delayed callback to remove the channel when the currently
      * scheduled jobs have completed */
-    entry->cleanupCallback.callback = removeSecureChannelCallback;
+    entry->cleanupCallback.callback = (UA_ApplicationCallback)removeSecureChannelCallback;
     entry->cleanupCallback.data = entry;
-    UA_Server_delayedCallback(cm->server, &entry->cleanupCallback);
+    UA_WorkQueue_enqueueDelayed(&cm->server->workQueue, &entry->cleanupCallback);
 }
 
 /* remove channels that were not renewed or who have no connection attached */

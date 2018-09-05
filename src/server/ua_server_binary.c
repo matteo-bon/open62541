@@ -785,8 +785,7 @@ UA_Server_processBinaryMessage(UA_Server *server, UA_Connection *connection,
 
 #ifdef UA_ENABLE_MULTITHREADING
 static void
-deleteConnection(UA_Server *server, void *data) {
-    UA_Connection *connection = (UA_Connection*)data;
+deleteConnection(UA_Server *server, UA_Connection *connection) {
     connection->free(connection);
 }
 #endif
@@ -801,8 +800,8 @@ UA_Server_removeConnection(UA_Server *server, UA_Connection *connection) {
     if(dc)
         return; /* Malloc cannot fail on OS's that support multithreading. They
                  * rather kill the process. */
-    dc->callback = deleteConnection;
+    dc->callback = (UA_ApplicationCallback)deleteConnection;
     dc->data = connection;
-    UA_Server_delayedCallback(server, dc);
+    UA_WorkQueue_enqueueDelayed(&server->workQueue, dc);
 #endif
 }
